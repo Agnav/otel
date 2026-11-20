@@ -1,0 +1,17 @@
+{
+  "name": "observability-lab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Learning lab: OpenTelemetry distributed tracing in Node.js",
+  "type": "module",
+  "scripts": {
+    "order": "pnpm --filter order-service dev",
+    "payment": "pnpm --filter payment-service dev",
+    "notification": "pnpm --filter notification-service dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  }
+}

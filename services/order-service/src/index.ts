@@ -1,0 +1,1 @@
+console.log('[order-service] up (Phase 1 — no OpenTelemetry yet)');

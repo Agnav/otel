@@ -1,0 +1,1 @@
+console.log('[payment-service] up (Phase 1 — no OpenTelemetry yet)');

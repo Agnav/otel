@@ -1,0 +1,1 @@
+console.log('[notification-service] up (Phase 1 — no OpenTelemetry yet)');
