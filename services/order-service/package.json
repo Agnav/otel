@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@lab/observability": "workspace:*",
+    "@opentelemetry/api": "1.10.0",
     "express": "5.3.0"
   }
 }
