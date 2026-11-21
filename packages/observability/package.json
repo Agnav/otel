@@ -1,0 +1,16 @@
+{
+  "name": "@lab/observability",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tracing": "./src/tracing.ts"
+  },
+  "dependencies": {
+    "@opentelemetry/auto-instrumentations-node": "0.83.1",
+    "@opentelemetry/sdk-node": "0.301.2",
+    "@opentelemetry/sdk-trace": "3.1.1"
+  }
+}

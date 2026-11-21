@@ -2,7 +2,7 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 
 const app = express();
-const PORT = Number(process.env.PORT ?? 3002);
+const PORT = Number(process.env.PORT ?? 3102);
 
 // Middleware: parses incoming JSON bodies into req.body.
 // Without this, req.body would be undefined.

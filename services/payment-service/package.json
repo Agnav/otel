@@ -4,13 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts"
+    "dev": "OTEL_SERVICE_NAME=payment-service node --import tsx --import @lab/observability/tracing src/index.ts"
   },
   "devDependencies": {
     "@types/express": "5.0.6",
     "tsx": "4.23.15"
   },
   "dependencies": {
+    "@lab/observability": "workspace:*",
     "express": "5.3.0"
   }
 }

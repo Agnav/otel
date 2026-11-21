@@ -1,6 +1,6 @@
 # API Contracts
 
-## Order Service — `http://localhost:3001`
+## Order Service — `http://localhost:3101`
 
 ### POST /orders
 
@@ -32,7 +32,7 @@ Responses:
 
 ---
 
-## Payment Service — `http://localhost:3002`
+## Payment Service — `http://localhost:3102`
 
 ### POST /payments
 
@@ -62,7 +62,7 @@ Responses:
 
 ---
 
-## Notification Service — `http://localhost:3003`
+## Notification Service — `http://localhost:3103`
 
 ### POST /notifications
 

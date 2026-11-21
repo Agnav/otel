@@ -2,9 +2,9 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 
 const app = express();
-const PORT = Number(process.env.PORT ?? 3001);
-const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL ?? 'http://localhost:3002';
-const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http://localhost:3003';
+const PORT = Number(process.env.PORT ?? 3101);
+const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL ?? 'http://localhost:3102';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http://localhost:3103';
 
 // Middleware: parses incoming JSON bodies into req.body.
 app.use(express.json());
