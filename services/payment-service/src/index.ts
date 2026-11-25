@@ -9,6 +9,12 @@ const PORT = Number(process.env.PORT ?? 3102);
 // Without this, req.body would be undefined.
 app.use(express.json());
 
+// TEMPORARY (Phase 5): inspect the W3C header that arrived over the wire.
+app.use((req, _res, next) => {
+  console.log('[payment] incoming traceparent:', req.headers.traceparent ?? '(none)');
+  next();
+});
+
 // Tracer for this service. The name shows up as `instrumentationScope` in spans,
 // so your own spans are distinguishable from auto-instrumented ones.
 const tracer = trace.getTracer('payment-service');
