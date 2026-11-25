@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { logger } from '@lab/observability/logging';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3103);
@@ -9,9 +10,21 @@ const PORT = Number(process.env.PORT ?? 3103);
 // Without this, req.body would be undefined.
 app.use(express.json());
 
-// TEMPORARY (Phase 5): inspect the W3C header that arrived over the wire.
-app.use((req, _res, next) => {
-  console.log('[notification] incoming traceparent:', req.headers.traceparent ?? '(none)');
+// Structured request log. trace_id/span_id are added automatically by the
+// logger's mixin (active span context) — no need to pass them around.
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    logger.info(
+      {
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: Date.now() - startedAt,
+      },
+      'request completed',
+    );
+  });
   next();
 });
 
@@ -62,8 +75,13 @@ app.post('/notifications', (req, res) => {
         sentAt: new Date().toISOString(),
       };
 
+      logger.info(
+        { order_id: orderId, notification_id: notificationId, type },
+        'notification sent',
+      );
       res.status(201).json(notification);
     } catch (error) {
+      logger.error({ err: error, order_id: orderId }, 'notification send failed');
       // Standard convention: records type/message/stacktrace as an `exception` event.
       span.recordException(error as Error);
       span.setStatus({ code: SpanStatusCode.ERROR, message: 'notification send failed' });
@@ -76,5 +94,5 @@ app.post('/notifications', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[notification-service] listening on http://localhost:${PORT}`);
+  logger.info({ port: PORT }, 'notification service listening');
 });

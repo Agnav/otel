@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { logger } from '@lab/observability/logging';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3101);
@@ -10,6 +11,21 @@ const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http:/
 // Middleware: parses incoming JSON bodies into req.body.
 app.use(express.json());
 
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    logger.info(
+      {
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: Date.now() - startedAt,
+      },
+      'request completed',
+    );
+  });
+  next();
+});
 // Tracer for this service. The name shows up as `instrumentationScope` in spans,
 // so your own spans are distinguishable from auto-instrumented ones.
 const tracer = trace.getTracer('order-service');
@@ -43,6 +59,7 @@ app.post('/orders', async (req, res) => {
       });
 
       if (!isValid) {
+        logger.warn({ reason: 'invalid_payload' }, 'order validation failed');
         orderSpan.addEvent('order.rejected', { reason: 'invalid_payload' });
         orderSpan.setStatus({ code: SpanStatusCode.ERROR, message: 'invalid order payload' });
         res.status(400).json({
@@ -55,6 +72,7 @@ app.post('/orders', async (req, res) => {
       orderSpan.setAttribute('order.id', orderId);
       orderSpan.setAttribute('order.amount', amount);
       orderSpan.setAttribute('order.item', item);
+      logger.info({ order_id: orderId, amount, item }, 'order created');
 
       // --- Step A: payment (must succeed, or the whole order fails) ---
       let payment: { paymentId: string; status: string };
@@ -72,6 +90,7 @@ app.post('/orders', async (req, res) => {
         orderSpan.setAttribute('payment.status', payment.status);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
+        logger.error({ err: error, order_id: orderId }, 'payment failed');
         // Standard convention: records type/message/stacktrace as an `exception` event.
         orderSpan.recordException(error as Error);
         orderSpan.setStatus({ code: SpanStatusCode.ERROR, message: detail });
@@ -96,6 +115,7 @@ app.post('/orders', async (req, res) => {
         orderSpan.setAttribute('notification.status', notification.status);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
+        logger.warn({ err: error, order_id: orderId }, 'notification failed, order still confirmed');
         notification = { status: 'unavailable', detail }; // order still confirmed
         // Order survives a failed notification — so: event + attribute, but NOT an ERROR status.
         orderSpan.addEvent('notification.failed', { 'error.message': detail });
@@ -103,6 +123,10 @@ app.post('/orders', async (req, res) => {
       }
 
       orderSpan.setAttribute('order.status', 'confirmed');
+      logger.info(
+        { order_id: orderId, payment_id: payment.paymentId, notification_status: notification.status },
+        'order confirmed',
+      );
       res.status(201).json({
         orderId,
         status: 'confirmed',
@@ -119,5 +143,5 @@ app.post('/orders', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[order-service] listening on http://localhost:${PORT}`);
+  logger.info({ port: PORT }, 'order service listening');
 });

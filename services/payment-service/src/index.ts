@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { logger } from '@lab/observability/logging';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3102);
@@ -9,9 +10,21 @@ const PORT = Number(process.env.PORT ?? 3102);
 // Without this, req.body would be undefined.
 app.use(express.json());
 
-// TEMPORARY (Phase 5): inspect the W3C header that arrived over the wire.
-app.use((req, _res, next) => {
-  console.log('[payment] incoming traceparent:', req.headers.traceparent ?? '(none)');
+// Structured request log. trace_id/span_id are added automatically by the
+// logger's mixin (active span context) — no need to pass them around.
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    logger.info(
+      {
+        method: req.method,
+        path: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: Date.now() - startedAt,
+      },
+      'request completed',
+    );
+  });
   next();
 });
 
@@ -58,6 +71,8 @@ app.post('/payments', (req, res) => {
           authorizeSpan.setAttribute('payment.authorized', true);
           // Event: a timestamped moment inside this span, with its own attributes.
           authorizeSpan.addEvent('risk_check_passed', { 'risk.score': 0.12 });
+          // debug: useful detail, hidden at the default info level.
+          logger.debug({ payment_id: paymentId, amount }, 'payment authorized');
         } finally {
           // Mandatory: this SDK's startActiveSpan does NOT end the span for you.
           authorizeSpan.end();
@@ -75,8 +90,13 @@ app.post('/payments', (req, res) => {
 
       span.setAttribute('payment.status', payment.status);
       span.addEvent('payment.recorded', { 'payment.id': paymentId });
+      logger.info(
+        { order_id: orderId, payment_id: paymentId, amount, status: payment.status },
+        'payment processed',
+      );
       res.status(201).json(payment);
     } catch (error) {
+      logger.error({ err: error, order_id: orderId }, 'payment processing failed');
       // Standard convention: records type/message/stacktrace as an `exception` event.
       span.recordException(error as Error);
       span.setStatus({ code: SpanStatusCode.ERROR, message: 'payment processing failed' });
@@ -88,5 +108,5 @@ app.post('/payments', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[payment-service] listening on http://localhost:${PORT}`);
+  logger.info({ port: PORT }, 'payment service listening');
 });
