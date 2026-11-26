@@ -7,6 +7,14 @@ import { prometheusExporter } from '@lab/observability/tracing';
 const app = express();
 const PORT = Number(process.env.PORT ?? 3102);
 
+// Phase 9 failure injection.
+// 0 = never fail, 1 = always fail, 0.3 = ~30% of requests.
+const PAYMENT_FAILURE_RATE = Number(process.env.PAYMENT_FAILURE_RATE ?? 0);
+// Artificial delay before the decision, to simulate a slow dependency.
+const PAYMENT_LATENCY_MS = Number(process.env.PAYMENT_LATENCY_MS ?? 0);
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 // Middleware: parses incoming JSON bodies into req.body.
 // Without this, req.body would be undefined.
 app.use(express.json());
@@ -61,7 +69,7 @@ app.get('/metrics', (req, res) => {
   void prometheusExporter.getMetricsRequestHandler(req, res);
 });
 
-app.post('/payments', (req, res) => {
+app.post('/payments', async (req, res) => {
   const startedAt = Date.now();
   const { orderId, amount } = (req.body ?? {}) as { orderId?: unknown; amount?: unknown };
 
@@ -72,7 +80,7 @@ app.post('/payments', (req, res) => {
 
   // Manual span #1: the whole payment operation.
   // Anything auto-instrumented inside this callback becomes its child.
-  tracer.startActiveSpan('payment.process', (span) => {
+  await tracer.startActiveSpan('payment.process', async (span) => {
     try {
       const paymentId = `pay_${randomUUID()}`;
 
@@ -81,9 +89,16 @@ app.post('/payments', (req, res) => {
       span.setAttribute('payment.id', paymentId);
       span.setAttribute('payment.amount', amount);
 
+      // Simulated slow dependency: the delay shows up in the span duration
+      // and in payment.processing.duration.
+      if (PAYMENT_LATENCY_MS > 0) {
+        span.addEvent('payment.simulated_latency', { 'payment.latency_ms': PAYMENT_LATENCY_MS });
+        await sleep(PAYMENT_LATENCY_MS);
+      }
+
       // Manual span #2: nested step — "authorize with the bank".
       // A child, because it starts inside payment.process's active context.
-      tracer.startActiveSpan('payment.authorize', (authorizeSpan) => {
+      await tracer.startActiveSpan('payment.authorize', async (authorizeSpan) => {
         try {
           authorizeSpan.setAttribute('payment.amount', amount);
           authorizeSpan.setAttribute('payment.authorized', true);
@@ -97,7 +112,12 @@ app.post('/payments', (req, res) => {
         }
       });
 
-      // Phase 2: payment always succeeds. Failure simulation arrives in Phase 9.
+      // Simulated decline. Thrown here, inside payment.process, so its catch
+      // is the span that gets ERROR status + the exception event.
+      if (Math.random() < PAYMENT_FAILURE_RATE) {
+        throw new Error('payment declined (injected failure)');
+      }
+
       const payment: PaymentResponse = {
         paymentId,
         orderId,

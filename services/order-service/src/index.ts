@@ -9,6 +9,10 @@ const PORT = Number(process.env.PORT ?? 3101);
 const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL ?? 'http://localhost:3102';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL ?? 'http://localhost:3103';
 
+// How long we're willing to wait for payment (client-side deadline).
+// AbortSignal.timeout() cancels our wait — the server keeps working.
+const PAYMENT_TIMEOUT_MS = Number(process.env.PAYMENT_TIMEOUT_MS ?? 2000);
+
 // Middleware: parses incoming JSON bodies into req.body.
 app.use(express.json());
 
@@ -113,6 +117,8 @@ app.post('/orders', async (req, res) => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ orderId, amount }),
+          // Client-side deadline: abort the wait after N ms.
+          signal: AbortSignal.timeout(PAYMENT_TIMEOUT_MS),
         });
         if (!response.ok) {
           throw new Error(`payment service responded with HTTP ${response.status}`);
@@ -122,7 +128,9 @@ app.post('/orders', async (req, res) => {
         orderSpan.setAttribute('payment.status', payment.status);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        logger.error({ err: error, order_id: orderId }, 'payment failed');
+        // TimeoutError is a DOMException (not an Error), hence the negative check.
+        const timeout = !(error instanceof Error) || error.name === 'TimeoutError';
+        logger.error({ err: error, order_id: orderId, timeout }, 'payment failed');
         recordOutcome('rejected');
         // Standard convention: records type/message/stacktrace as an `exception` event.
         orderSpan.recordException(error as Error);

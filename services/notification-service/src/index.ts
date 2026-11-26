@@ -7,6 +7,12 @@ import { prometheusExporter } from '@lab/observability/tracing';
 const app = express();
 const PORT = Number(process.env.PORT ?? 3103);
 
+// Phase 9 failure injection (same knobs as payment).
+const NOTIFICATION_FAILURE_RATE = Number(process.env.NOTIFICATION_FAILURE_RATE ?? 0);
+const NOTIFICATION_LATENCY_MS = Number(process.env.NOTIFICATION_LATENCY_MS ?? 0);
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 // Middleware: parses incoming JSON bodies into req.body.
 // Without this, req.body would be undefined.
 app.use(express.json());
@@ -61,7 +67,7 @@ app.get('/metrics', (req, res) => {
   void prometheusExporter.getMetricsRequestHandler(req, res);
 });
 
-app.post('/notifications', (req, res) => {
+app.post('/notifications', async (req, res) => {
   const startedAt = Date.now();
   const { orderId, type } = (req.body ?? {}) as { orderId?: unknown; type?: unknown };
 
@@ -72,7 +78,7 @@ app.post('/notifications', (req, res) => {
 
   // Manual span #1: the whole notification operation.
   // Anything auto-instrumented inside this callback becomes its child.
-  tracer.startActiveSpan('notification.send', (span) => {
+  await tracer.startActiveSpan('notification.send', async (span) => {
     try {
       const notificationId = `notif_${randomUUID()}`;
 
@@ -81,6 +87,20 @@ app.post('/notifications', (req, res) => {
       span.setAttribute('notification.id', notificationId);
       span.setAttribute('notification.type', type);
       span.setAttribute('notification.status', 'sent');
+
+      // Simulated slow provider: shows up in notification.processing.duration.
+      if (NOTIFICATION_LATENCY_MS > 0) {
+        span.addEvent('notification.simulated_latency', {
+          'notification.latency_ms': NOTIFICATION_LATENCY_MS,
+        });
+        await sleep(NOTIFICATION_LATENCY_MS);
+      }
+
+      // Simulated provider outage. The catch below marks this span ERROR;
+      // the order still succeeds (notification is best-effort).
+      if (Math.random() < NOTIFICATION_FAILURE_RATE) {
+        throw new Error('notification provider unavailable (injected failure)');
+      }
 
       // Event: a timestamped moment inside the span, with its own attributes.
       span.addEvent('notification.delivered', { 'notification.channel': 'email' });
