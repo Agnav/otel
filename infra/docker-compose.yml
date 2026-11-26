@@ -1,0 +1,20 @@
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - "16686:16686" # web UI
+      - "4318:4318" # OTLP/HTTP receiver
+    # all-in-one = collector + in-memory storage + UI in one process.
+    # Storage is RAM: traces disappear when the container restarts.
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - "9090:9090" # UI + PromQL API
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # Containers have their own network namespace: "localhost" inside the
+      # container is NOT your host. This maps host.docker.internal to the host.
+      # (Docker Desktop does this automatically; on Linux you need this line.)
+      - "host.docker.internal:host-gateway"

@@ -1,6 +1,11 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { ConsoleSpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace';
+import {
+  BatchSpanProcessor,
+  ConsoleSpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import {
   CompositePropagator,
   W3CTraceContextPropagator,
@@ -14,15 +19,31 @@ import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 // so we wire it explicitly here.)
 const propagationOff = process.env.OTEL_PROPAGATION === 'off';
 
+// Lab switch, same spirit as OTEL_PROPAGATION: prove that the exporter is the
+// only thing that changes between "spans in my terminal" and "spans in Jaeger".
+const useConsoleExporter = process.env.SPAN_EXPORTER === 'console';
+
+// OTLP/HTTP endpoint: Jaeger all-in-one listens here. In a container-to-container
+// setup this would be http://jaeger:4318/v1/traces.
+const otlpExporter = new OTLPTraceExporter({ url: 'http://localhost:4318/v1/traces' });
+
 // The exporter IS the MetricReader. preventServerStart: we don't want it to open
 // its own port (default 9464) — Express serves /metrics on the service's port.
 // Exported so app code can mount getMetricsRequestHandler.
 export const prometheusExporter = new PrometheusExporter({ preventServerStart: true });
 
 const sdk = new NodeSDK({
-  // SimpleSpanProcessor: every finished span is exported immediately.
-  // (Production uses BatchSpanProcessor — buffered, efficient. We want instant feedback.)
-  spanProcessors: [new SimpleSpanProcessor({ exporter: new ConsoleSpanExporter() })],
+  // The processor decides WHEN spans leave the process; the exporter decides WHERE.
+  spanProcessors: [
+    useConsoleExporter
+      // Learning mode: export immediately, human-readable, no backend needed.
+      ? new SimpleSpanProcessor({ exporter: new ConsoleSpanExporter() })
+      // Running mode: buffer in memory, ship in batches, survive bursts.
+      : new BatchSpanProcessor({
+          exporter: otlpExporter,
+          scheduledDelayMillis: 1000, // default 5000ms; 1s feels responsive in a lab
+        }),
+  ],
 
   // Registers a MeterProvider with this reader: metrics.getMeter() in app code
   // now resolves to it, and values are computed at scrape time (pull model).
@@ -50,7 +71,9 @@ const sdk = new NodeSDK({
 
 // Starts the SDK: patches http/express/fetch etc. NOW, before app code loads.
 sdk.start();
-console.log(`[tracing] otel sdk started (propagation ${propagationOff ? 'OFF' : 'ON'})`);
+console.log(
+  `[tracing] otel sdk started (propagation ${propagationOff ? 'OFF' : 'ON'}, exporter ${useConsoleExporter ? 'console' : 'otlp'})`,
+);
 
 // Graceful shutdown: flush remaining telemetry instead of losing it.
 async function shutdown(signal: string): Promise<void> {
