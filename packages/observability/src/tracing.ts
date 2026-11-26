@@ -6,6 +6,7 @@ import {
   W3CTraceContextPropagator,
   W3CBaggagePropagator,
 } from '@opentelemetry/core';
+import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 
 // Lab switch for the Phase 5 exercise: OTEL_PROPAGATION=off disables
 // inject/extract and therefore breaks the distributed trace on purpose.
@@ -13,10 +14,19 @@ import {
 // so we wire it explicitly here.)
 const propagationOff = process.env.OTEL_PROPAGATION === 'off';
 
+// The exporter IS the MetricReader. preventServerStart: we don't want it to open
+// its own port (default 9464) — Express serves /metrics on the service's port.
+// Exported so app code can mount getMetricsRequestHandler.
+export const prometheusExporter = new PrometheusExporter({ preventServerStart: true });
+
 const sdk = new NodeSDK({
   // SimpleSpanProcessor: every finished span is exported immediately.
   // (Production uses BatchSpanProcessor — buffered, efficient. We want instant feedback.)
   spanProcessors: [new SimpleSpanProcessor({ exporter: new ConsoleSpanExporter() })],
+
+  // Registers a MeterProvider with this reader: metrics.getMeter() in app code
+  // now resolves to it, and values are computed at scrape time (pull model).
+  metricReaders: [prometheusExporter],
 
   // THE propagator: this single object is what writes/reads `traceparent`.
   // Empty list = nothing is injected or extracted.

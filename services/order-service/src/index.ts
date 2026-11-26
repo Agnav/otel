@@ -1,7 +1,8 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { trace, SpanStatusCode, metrics } from '@opentelemetry/api';
 import { logger } from '@lab/observability/logging';
+import { prometheusExporter } from '@lab/observability/tracing';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3101);
@@ -30,11 +31,41 @@ app.use((req, res, next) => {
 // so your own spans are distinguishable from auto-instrumented ones.
 const tracer = trace.getTracer('order-service');
 
+const meter = metrics.getMeter('order-service');
+
+// Counter: how many orders reached a final decision. `status` is bounded
+// (confirmed/rejected), so it is a safe label. NEVER use order_id here.
+const ordersCreated = meter.createCounter('orders.created', {
+  description: 'Orders that reached a final decision',
+});
+
+// Histogram: latency must be a distribution, not a counter.
+const orderDuration = meter.createHistogram('order.processing.duration', {
+  unit: 'ms',
+  description: 'Order handling time from request to response',
+});
+
+// Counter: orders that survived a notification failure (alert-worthy trend).
+const notificationFailures = meter.createCounter('order.notification.failures', {
+  description: 'Orders confirmed despite a failed notification',
+});
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'order-service' });
 });
 
+// Prometheus scrapes this. The handler is an instance method (needs `this`).
+app.get('/metrics', (req, res) => {
+  void prometheusExporter.getMetricsRequestHandler(req, res);
+});
+
 app.post('/orders', async (req, res) => {
+  const startedAt = Date.now();
+  const recordOutcome = (status: 'confirmed' | 'rejected') => {
+    ordersCreated.add(1, { status });
+    orderDuration.record(Date.now() - startedAt, { status });
+  };
+
   const { customerId, amount, item } = (req.body ?? {}) as {
     customerId?: unknown;
     amount?: unknown;
@@ -60,6 +91,7 @@ app.post('/orders', async (req, res) => {
 
       if (!isValid) {
         logger.warn({ reason: 'invalid_payload' }, 'order validation failed');
+        recordOutcome('rejected');
         orderSpan.addEvent('order.rejected', { reason: 'invalid_payload' });
         orderSpan.setStatus({ code: SpanStatusCode.ERROR, message: 'invalid order payload' });
         res.status(400).json({
@@ -91,6 +123,7 @@ app.post('/orders', async (req, res) => {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         logger.error({ err: error, order_id: orderId }, 'payment failed');
+        recordOutcome('rejected');
         // Standard convention: records type/message/stacktrace as an `exception` event.
         orderSpan.recordException(error as Error);
         orderSpan.setStatus({ code: SpanStatusCode.ERROR, message: detail });
@@ -116,6 +149,7 @@ app.post('/orders', async (req, res) => {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         logger.warn({ err: error, order_id: orderId }, 'notification failed, order still confirmed');
+        notificationFailures.add(1);
         notification = { status: 'unavailable', detail }; // order still confirmed
         // Order survives a failed notification — so: event + attribute, but NOT an ERROR status.
         orderSpan.addEvent('notification.failed', { 'error.message': detail });
@@ -123,6 +157,7 @@ app.post('/orders', async (req, res) => {
       }
 
       orderSpan.setAttribute('order.status', 'confirmed');
+      recordOutcome('confirmed');
       logger.info(
         { order_id: orderId, payment_id: payment.paymentId, notification_status: notification.status },
         'order confirmed',

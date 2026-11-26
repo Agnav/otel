@@ -1,7 +1,8 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { trace, SpanStatusCode, metrics } from '@opentelemetry/api';
 import { logger } from '@lab/observability/logging';
+import { prometheusExporter } from '@lab/observability/tracing';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3102);
@@ -32,6 +33,17 @@ app.use((req, res, next) => {
 // so your own spans are distinguishable from auto-instrumented ones.
 const tracer = trace.getTracer('payment-service');
 
+const meter = metrics.getMeter('payment-service');
+
+const paymentsProcessed = meter.createCounter('payments.processed', {
+  description: 'Payment attempts by outcome',
+});
+
+const paymentDuration = meter.createHistogram('payment.processing.duration', {
+  unit: 'ms',
+  description: 'Payment handling time',
+});
+
 interface PaymentResponse {
   paymentId: string;
   orderId: string;
@@ -44,7 +56,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'payment-service' });
 });
 
+// Prometheus scrapes this. The handler is an instance method (needs `this`).
+app.get('/metrics', (req, res) => {
+  void prometheusExporter.getMetricsRequestHandler(req, res);
+});
+
 app.post('/payments', (req, res) => {
+  const startedAt = Date.now();
   const { orderId, amount } = (req.body ?? {}) as { orderId?: unknown; amount?: unknown };
 
   if (typeof orderId !== 'string' || typeof amount !== 'number') {
@@ -90,12 +108,16 @@ app.post('/payments', (req, res) => {
 
       span.setAttribute('payment.status', payment.status);
       span.addEvent('payment.recorded', { 'payment.id': paymentId });
+      paymentsProcessed.add(1, { status: 'succeeded' });
+      paymentDuration.record(Date.now() - startedAt, { status: 'succeeded' });
       logger.info(
         { order_id: orderId, payment_id: paymentId, amount, status: payment.status },
         'payment processed',
       );
       res.status(201).json(payment);
     } catch (error) {
+      paymentsProcessed.add(1, { status: 'failed' });
+      paymentDuration.record(Date.now() - startedAt, { status: 'failed' });
       logger.error({ err: error, order_id: orderId }, 'payment processing failed');
       // Standard convention: records type/message/stacktrace as an `exception` event.
       span.recordException(error as Error);

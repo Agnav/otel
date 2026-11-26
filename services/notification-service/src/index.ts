@@ -1,7 +1,8 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { trace, SpanStatusCode, metrics } from '@opentelemetry/api';
 import { logger } from '@lab/observability/logging';
+import { prometheusExporter } from '@lab/observability/tracing';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3103);
@@ -32,6 +33,17 @@ app.use((req, res, next) => {
 // so your own spans are distinguishable from auto-instrumented ones.
 const tracer = trace.getTracer('notification-service');
 
+const meter = metrics.getMeter('notification-service');
+
+const notificationsSent = meter.createCounter('notifications.sent', {
+  description: 'Notifications sent by type',
+});
+
+const notificationDuration = meter.createHistogram('notification.processing.duration', {
+  unit: 'ms',
+  description: 'Notification handling time',
+});
+
 interface NotificationResponse {
   notificationId: string;
   orderId: string;
@@ -44,7 +56,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'notification-service' });
 });
 
+// Prometheus scrapes this. The handler is an instance method (needs `this`).
+app.get('/metrics', (req, res) => {
+  void prometheusExporter.getMetricsRequestHandler(req, res);
+});
+
 app.post('/notifications', (req, res) => {
+  const startedAt = Date.now();
   const { orderId, type } = (req.body ?? {}) as { orderId?: unknown; type?: unknown };
 
   if (typeof orderId !== 'string' || typeof type !== 'string') {
@@ -75,12 +93,16 @@ app.post('/notifications', (req, res) => {
         sentAt: new Date().toISOString(),
       };
 
+      notificationsSent.add(1, { type });
+      notificationDuration.record(Date.now() - startedAt, { type });
       logger.info(
         { order_id: orderId, notification_id: notificationId, type },
         'notification sent',
       );
       res.status(201).json(notification);
     } catch (error) {
+      notificationsSent.add(1, { status: 'failed', type });
+      notificationDuration.record(Date.now() - startedAt, { status: 'failed', type });
       logger.error({ err: error, order_id: orderId }, 'notification send failed');
       // Standard convention: records type/message/stacktrace as an `exception` event.
       span.recordException(error as Error);
